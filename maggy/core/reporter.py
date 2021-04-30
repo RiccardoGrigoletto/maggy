@@ -54,8 +54,7 @@ class Reporter(object):
         self.trial_fd = None
 
     def init_logger(self, trial_log_file):
-        """Initializes the trial log file
-        """
+        """Initializes the trial log file"""
         self.trial_log_file = trial_log_file
         env = EnvSing.get_instance()
         # Open trial log file descriptor
@@ -129,12 +128,13 @@ class Reporter(object):
             # Throws AttributeError when calling file ops on NoneType object
             except (IOError, ValueError, AttributeError) as e:
                 self.fd.write(
-                    ("An error occurred while writing logs: {}".format(e)).encode()
+                    env.str_or_byte(
+                        "An error occurred while writing logs: {}".format(e)
+                    )
                 )
 
     def get_data(self):
-        """Returns the metric and logs to be sent to the experiment driver.
-        """
+        """Returns the metric and logs to be sent to the experiment driver."""
         with self.lock:
             log_to_send = self.logs
             self.logs = ""

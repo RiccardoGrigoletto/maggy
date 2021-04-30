@@ -1,5 +1,5 @@
 #
-#   Copyright 2020 Logical Clocks AB
+#   Copyright 2021 Logical Clocks AB
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
 #   you may not use this file except in compliance with the License.
@@ -14,22 +14,30 @@
 #   limitations under the License.
 #
 
-import secrets
+from __future__ import annotations
 
+import secrets
 import select
 import socket
 import struct
 import threading
 import time
+import typing
+from typing import Any
+
 from pyspark import cloudpickle
 
 from maggy.core.environment.singleton import EnvSing
 from maggy.trial import Trial
 
+if typing.TYPE_CHECKING:  # Avoid circular import error.
+    from maggy.core.experiment_driver.driver import Driver
+
+
 MAX_RETRIES = 3
 BUFSIZE = 1024 * 2
 
-server_host_port = None
+SERVER_HOST_PORT = None
 
 
 class Reservations(object):
@@ -63,7 +71,7 @@ class Reservations(object):
                 "host_port": meta["host_port"],
                 "task_attempt": meta["task_attempt"],
                 "trial_id": meta["trial_id"],
-                "num_executors": self.required
+                "num_executors": self.required,
             }
 
             if self.remaining() == 0:
@@ -168,15 +176,17 @@ class Server(MessageSocket):
     reservations = None
     done = False
 
-    def __init__(self, count):
+    def __init__(self, num_executors):
         """
 
         Args:
-            count:
+            num_executors:
         """
-        assert count > 0
-        self.reservations = Reservations(count)
-        self.database = {}  # Generic data storage container for the server.
+        if not num_executors > 0:
+            raise ValueError("Number of executors has to be greater than zero!")
+        self.reservations = Reservations(num_executors)
+        self.callback_list = []
+        self.message_callbacks = self._register_callbacks()
 
     def await_reservations(self, sc, status={}, timeout=600):
         """
@@ -216,117 +226,20 @@ class Server(MessageSocket):
 
         """
         msg_type = msg["type"]
+        resp = {}
+        try:
+            self.message_callbacks[msg_type](
+                resp, msg, exp_driver
+            )  # Prepare response in callback.
+        except KeyError:
+            resp["type"] = "ERR"
+        MessageSocket.send(self, sock, resp)
 
-        # Prepare message
-        send = {}
-
-        if msg_type == "REG":
-            # check if executor was registered before and retrieve lost trial
-            lost_trial = self.reservations.get_assigned_trial(msg["partition_id"])
-            if lost_trial is not None:
-                # the trial or executor must have failed
-                exp_driver.get_trial(lost_trial).status = Trial.ERROR
-                # add a blacklist message to the worker queue
-                fail_msg = {
-                    "partition_id": msg["partition_id"],
-                    "type": "BLACK",
-                    "trial_id": lost_trial,
-                }
-                self.reservations.add(msg["data"])
-                exp_driver.add_message(fail_msg)
-            else:
-                # else add regular registration msg to queue
-                self.reservations.add(msg["data"])
-                exp_driver.add_message(msg)
-
-            send["type"] = "OK"
-        elif msg_type == "TORCH_CONFIG":
-            try:
-                send["data"] = self.reservations.get()[0]  # Config of worker with partition 1.
-            except KeyError:
-                send["data"] = None
-            send["type"] = "OK"
-        elif msg_type == "QUERY":
-            send["type"] = "QUERY"
-            send["data"] = self.reservations.done()
-        elif msg_type == "METRIC":
-            # add metric msg to the exp driver queue
-            exp_driver.add_message(msg)
-
-            if msg["trial_id"] is None:
-                send["type"] = "OK"
-                MessageSocket.send(self, sock, send)
-                return
-            elif msg["trial_id"] is not None:
-                if msg.get("data", None) is None:
-                    send["type"] = "OK"
-                    MessageSocket.send(self, sock, send)
-                    return
-
-            # lookup executor reservation to find assigned trial
-            trialId = msg["trial_id"]
-            # get early stopping flag, should be False for ablation
-            flag = exp_driver.get_trial(trialId).get_early_stop()
-
-            if flag:
-                send["type"] = "STOP"
-            else:
-                send["type"] = "OK"
-        elif msg_type == "FINAL":
-            # reset the reservation to avoid sending the same trial again
-            self.reservations.assign_trial(msg["partition_id"], None)
-
-            send["type"] = "OK"
-
-            # add metric msg to the exp driver queue
-            exp_driver.add_message(msg)
-        elif msg_type == "GET":
-            # lookup reservation to find assigned trial
-            trial_id = self.reservations.get_assigned_trial(msg["partition_id"])
-
-            # trial_id needs to be none because experiment_done can be true but
-            # the assigned trial might not be finalized yet
-            if exp_driver.experiment_done and trial_id is None:
-                send["type"] = "GSTOP"
-            else:
-                send["type"] = "TRIAL"
-
-            send["trial_id"] = trial_id
-
-            # retrieve trial information
-            if trial_id is not None:
-                send["data"] = exp_driver.get_trial(trial_id).params
-                exp_driver.get_trial(trial_id).status = Trial.RUNNING
-            else:
-                send["data"] = None
-        elif msg_type == "LOG":
-            # get data from experiment driver
-            result, log = exp_driver._get_logs()
-
-            send["type"] = "OK"
-            if log:
-                send["ex_logs"] = log
-            else:
-                send["ex_logs"] = None
-            send["num_trials"] = exp_driver.num_trials
-            send["to_date"] = result["num_trials"]
-            send["stopped"] = result["early_stopped"]
-            send["metric"] = result["best_val"]
-        else:
-            send["type"] = "ERR"
-
-        MessageSocket.send(self, sock, send)
-
-    def get_assigned_trial_id(self, partition_id):
-        """Returns the id of the assigned trial, given a ``partition_id``.
-
-        Arguments:
-            partition_id {[type]} -- [description]
-
-        Returns:
-            trial_id
-        """
-        return self.reservations.get_assigned_trial(partition_id)
+    def _register_callbacks(self):
+        message_callbacks = {}
+        for key, call in self.callback_list:
+            message_callbacks[key] = call
+        return message_callbacks
 
     def start(self, exp_driver):
         """
@@ -335,12 +248,12 @@ class Server(MessageSocket):
         Returns:
             address of the Server as a tuple of (host, port)
         """
-        global server_host_port
+        global SERVER_HOST_PORT
 
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server_sock, server_host_port = EnvSing.get_instance().connect_host(
-            server_sock, server_host_port, exp_driver
+        server_sock, SERVER_HOST_PORT = EnvSing.get_instance().connect_host(
+            server_sock, SERVER_HOST_PORT, exp_driver
         )
 
         def _listen(self, sock, driver):
@@ -357,35 +270,276 @@ class Server(MessageSocket):
                     else:
                         try:
                             msg = self.receive(sock)
-
                             # raise exception if secret does not match
                             # so client socket gets closed
                             if not secrets.compare_digest(
                                 msg["secret"], exp_driver._secret
                             ):
-                                exp_driver.log("SERVER secret: {}".format(exp_driver._secret))
-                                exp_driver.log("ERROR: wrong secret {}".format(msg["secret"]))
+                                exp_driver.log(
+                                    "SERVER secret: {}".format(exp_driver._secret)
+                                )
+                                exp_driver.log(
+                                    "ERROR: wrong secret {}".format(msg["secret"])
+                                )
                                 raise Exception
 
                             self._handle_message(sock, msg, driver)
-                        except Exception as e:
-                            _ = e
+                        except Exception:
                             sock.close()
                             CONNECTIONS.remove(sock)
-
             server_sock.close()
 
-        t = threading.Thread(target=_listen, args=(self, server_sock, exp_driver))
-        t.daemon = True
-        t.start()
-
-        return server_host_port
+        threading.Thread(
+            target=_listen, args=(self, server_sock, exp_driver), daemon=True
+        ).start()
+        return SERVER_HOST_PORT
 
     def stop(self):
         """
         Stop the server's socket listener.
         """
         self.done = True
+
+
+class OptimizationServer(Server):
+    """Implements the server for hyperparameter optimization and ablation."""
+
+    def __init__(self, num_executors: int):
+        """Registers the callbacks for message handling.
+
+        :param num_executors: Number of Spark executors scheduled for the
+            experiment.
+        """
+        super().__init__(num_executors)
+        self.callback_list = [
+            ("REG", self._register_callback),
+            ("QUERY", self._query_callback),
+            ("METRIC", self._metric_callback),
+            ("FINAL", self._final_callback),
+            ("GET", self._get_callback),
+            ("LOG", self._log_callback),
+        ]
+        self.message_callbacks = self._register_callbacks()
+
+    def _register_callback(self, resp: dict, msg: dict, exp_driver: Driver) -> None:
+        """Register message callback.
+
+        Checks if the executor was registered before and reassignes lost trial,
+        otherwise assignes a new trial to the executor.
+        """
+        lost_trial = self.reservations.get_assigned_trial(msg["partition_id"])
+        if lost_trial is not None:
+            # the trial or executor must have failed
+            exp_driver.get_trial(lost_trial).status = Trial.ERROR
+            # add a blacklist message to the worker queue
+            fail_msg = {
+                "partition_id": msg["partition_id"],
+                "type": "BLACK",
+                "trial_id": lost_trial,
+            }
+            self.reservations.add(msg["data"])
+            exp_driver.add_message(fail_msg)
+        else:
+            # else add regular registration msg to queue
+            self.reservations.add(msg["data"])
+            exp_driver.add_message(msg)
+        resp["type"] = "OK"
+
+    def _query_callback(self, resp: dict, *_: Any) -> None:
+        """Query message callback.
+
+        Checks if all executors have been registered successfully on the server.
+        """
+        resp["type"] = "QUERY"
+        resp["data"] = self.reservations.done()
+
+    def _metric_callback(self, resp: dict, msg: dict, exp_driver: Driver) -> None:
+        """Metric message callback.
+
+        Determines if a trial should be stopped or not.
+        """
+        exp_driver.add_message(msg)
+        if msg["trial_id"] is None:
+            resp["type"] = "OK"
+        elif msg["trial_id"] is not None and msg.get("data", None) is None:
+            resp["type"] = "OK"
+        else:
+            # lookup executor reservation to find assigned trial
+            # get early stopping flag, should be False for ablation
+            flag = exp_driver.get_trial(msg["trial_id"]).get_early_stop()
+            resp["type"] = "STOP" if flag else "OK"
+
+    def _final_callback(self, resp: dict, msg: dict, exp_driver: Driver) -> None:
+        """Final message callback.
+
+        Resets the reservation to avoid sending the trial again.
+        """
+        self.reservations.assign_trial(msg["partition_id"], None)
+        resp["type"] = "OK"
+        # add metric msg to the exp driver queue
+        exp_driver.add_message(msg)
+
+    def _get_callback(self, resp: dict, msg: dict, exp_driver: Driver) -> None:
+        # lookup reservation to find assigned trial
+        trial_id = self.reservations.get_assigned_trial(msg["partition_id"])
+        # trial_id needs to be none because experiment_done can be true but
+        # the assigned trial might not be finalized yet
+        if exp_driver.experiment_done and trial_id is None:
+            resp["type"] = "GSTOP"
+        else:
+            resp["type"] = "TRIAL"
+        resp["trial_id"] = trial_id
+        # retrieve trial information
+        if trial_id is not None:
+            resp["data"] = exp_driver.get_trial(trial_id).params
+            exp_driver.get_trial(trial_id).status = Trial.RUNNING
+        else:
+            resp["data"] = None
+
+    def _log_callback(self, resp: dict, _: Any, exp_driver: Driver) -> None:
+        """Log message callback.
+
+        Copies logs from the driver and returns them.
+        """
+        # get data from experiment driver
+        result, log = exp_driver.get_logs()
+        resp["type"] = "OK"
+        resp["ex_logs"] = log if log else None
+        resp["num_trials"] = exp_driver.num_trials
+        resp["to_date"] = result["num_trials"]
+        resp["stopped"] = result["early_stopped"]
+        resp["metric"] = result["best_val"]
+
+    def get_assigned_trial_id(self, partition_id: int) -> dict:
+        """Returns the id of the assigned trial, given a ``partition_id``.
+
+        :param partition_id: The partition id to look up.
+
+        :returns: The trial ID of the partition.
+        """
+        return self.reservations.get_assigned_trial(partition_id)
+
+
+class DistributedTrainingServer(Server):
+    """Implements the server for distributed training."""
+
+    def __init__(self, num_executors: int):
+        """Registers the callbacks for message handling.
+
+        :param num_executors: Number of Spark executors scheduled for the
+            experiment.
+        """
+        super().__init__(num_executors)
+        self.callback_list = [
+            ("REG", self._register_callback),
+            ("METRIC", self._metric_callback),
+            ("EXEC_CONFIG", self._exec_config_callback),
+            ("LOG", self._log_callback),
+            ("QUERY", self._query_callback),
+            ("FINAL", self._final_callback),
+        ]
+        self.message_callbacks = self._register_callbacks()
+
+    def _register_callback(self, resp: dict, msg: dict, exp_driver: Driver) -> None:
+        """Register message callback.
+
+        Saves workers connection metadata for initialization of distributed
+        backend.
+        """
+        self.reservations.add(msg["data"])
+        exp_driver.add_message(msg)
+        resp["type"] = "OK"
+
+    def _exec_config_callback(self, resp: dict, *_: Any) -> None:
+        """Executor config message callback.
+
+        Returns the connection info of all Spark executors registered.
+        """
+        try:
+            resp["data"] = self.reservations.get()
+        except KeyError:
+            resp["data"] = None
+        resp["type"] = "OK"
+
+    def _log_callback(self, resp: dict, _: Any, exp_driver: Driver) -> None:
+        """Log message callback.
+
+        Copies logs from the driver and returns them.
+        """
+        _, log = exp_driver.get_logs()
+        resp["type"] = "OK"
+        resp["ex_logs"] = log if log else None
+        resp["num_trials"] = 1
+        resp["to_date"] = 0
+        resp["stopped"] = False
+        resp["metric"] = "N/A"
+
+    def _metric_callback(self, resp: dict, msg: dict, exp_driver: Driver) -> None:
+        """Metric message callback.
+
+        Confirms heartbeat messages from the clients and adds logs to the driver.
+        """
+        exp_driver.add_message(msg)
+        resp["type"] = "OK"
+
+    def _query_callback(self, resp: dict, *_: Any) -> None:
+        """Query message callback.
+
+        Checks if all executors have been registered successfully on the server.
+        """
+        resp["type"] = "QUERY"
+        resp["data"] = self.reservations.done()
+
+    def _final_callback(self, resp: dict, msg: dict, exp_driver: Driver) -> None:
+        """Final message callback.
+
+        Adds final results to the message queue.
+        """
+        resp["type"] = "OK"
+        exp_driver.add_message(msg)
+
+
+class TensorflowServer(DistributedTrainingServer):
+    """Implements the server for distributed training using Tensorflow."""
+
+    def __init__(self, num_executors: int):
+        """Registers the callbacks for message handling.
+
+        :param num_executors: Number of Spark executors scheduled for the
+            experiment.
+        """
+        super().__init__(num_executors)
+        self.callback_list = [
+            ("REG", self._register_callback),
+            ("METRIC", self._metric_callback),
+            ("TF_CONFIG", self._tf_callback),
+            ("RESERVATIONS", self._get_reservations),
+            ("LOG", self._log_callback),
+            ("QUERY", self._query_callback),
+            ("FINAL", self._final_callback),
+        ]
+        self.message_callbacks = self._register_callbacks()
+
+    def _get_reservations(self, resp: dict, *_: Any) -> None:
+
+        try:
+            resp["data"] = self.reservations.get()
+        except KeyError:
+            resp["data"] = None
+        resp["type"] = "OK"
+
+    def _tf_callback(self, resp: dict, *_: Any) -> None:
+        """Tensorflow message callback.
+
+        Returns the connection info of the Spark worker with partition ID 1 if
+        available.
+        """
+        try:
+            # Get the config of worker with partition 1.
+            resp["data"] = self.reservations.get()[0]
+        except KeyError:
+            resp["data"] = None
+        resp["type"] = "OK"
 
 
 class Client(MessageSocket):
@@ -426,11 +580,7 @@ class Client(MessageSocket):
                 msg["logs"] = None
             else:
                 msg["logs"] = logs
-
-        # if msg_data or ((msg_data == True) or (msg_data == False)):
-        #    msg['data'] = msg_data
         msg["data"] = msg_data
-
         done = False
         tries = 0
         while not done and tries < MAX_RETRIES:
@@ -445,10 +595,7 @@ class Client(MessageSocket):
                 req_sock.close()
                 req_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 req_sock.connect(self.server_addr)
-
-        resp = MessageSocket.receive(self, req_sock)
-
-        return resp
+        return MessageSocket.receive(self, req_sock)
 
     def close(self):
         """Close the client's sockets."""
@@ -477,24 +624,26 @@ class Client(MessageSocket):
         return done
 
     def start_heartbeat(self, reporter):
-        def _heartbeat(self, report):
+        def _heartbeat(self, reporter):
             while not self.done:
-                with report.lock:
-                    metric, step, logs = report.get_data()
+                backoff = True  # Allow to tolerate HB failure on shutdown (once)
+                with reporter.lock:
+                    metric, step, logs = reporter.get_data()
                     data = {"value": metric, "step": step}
-
-                    resp = self._request(
-                        self.hb_sock, "METRIC", data, report.get_trial_id(), logs
-                    )
-                    _ = self._handle_message(resp, report)
-
-                # sleep one second
+                    try:
+                        resp = self._request(
+                            self.hb_sock, "METRIC", data, reporter.get_trial_id(), logs
+                        )
+                    except OSError as err:  # TODO: Verify that this is necessary
+                        if backoff:
+                            backoff = False
+                            time.sleep(5)
+                            continue
+                        raise OSError from err
+                    self._handle_message(resp, reporter)
                 time.sleep(self.hb_interval)
 
-        t = threading.Thread(target=_heartbeat, args=(self, reporter))
-        t.daemon = True
-        t.start()
-
+        threading.Thread(target=_heartbeat, args=(self, reporter), daemon=True).start()
         reporter.log("Started metric heartbeat", False)
 
     def get_suggestion(self, reporter):
@@ -508,11 +657,18 @@ class Client(MessageSocket):
             time.sleep(1)
         return trial_id, parameters
 
-    def get_torch_config(self, timeout=60):
+    def get_message(self, msg_type, timeout=60):
+        """Return the property of msg_type.
+
+        :param msg_type: The property to request.
+        :param timeout: Waiting time for the request (Default: ''60'')
+
+        :return the property requested
+        """
         config = None
         start_time = time.time()
         while not config and time.time() - start_time < timeout:
-            config = self._request(self.sock, "TORCH_CONFIG").get("data", None)
+            config = self._request(self.sock, msg_type).get("data", None)
         return config
 
     def stop(self):
