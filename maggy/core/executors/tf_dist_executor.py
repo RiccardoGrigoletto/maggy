@@ -19,15 +19,12 @@ import inspect
 import json
 import traceback
 import os
-import random
 import socket
 from typing import Callable, Any, Tuple
 
-import numpy as np
-import tensorflow
 import tensorflow as tf
 
-from maggy import util
+from maggy import util, tensorboard
 from maggy.core.tf_patching.tf_modules import get_wrapped_model
 from maggy.experiment_config import TfDistributedConfig
 from maggy.core.rpc import Client
@@ -84,12 +81,12 @@ def dist_executor_fn(
         try:
             _register_with_servers(client, reporter, partition_id)
             tb_logdir, trial_log_file = _setup_logging(reporter, log_dir)
+            tensorboard._register(tb_logdir)
             reporter.log("Awaiting worker reservations.")
             client.await_reservations()
             reporter.log("Reservations complete, configuring Tensorflow.")
-            master_config = client.get_message("TF_CONFIG")
             reservations = client.get_message("RESERVATIONS")
-            if not master_config:
+            if not reservations:
                 reporter.log("Tensorflow registration failed, exiting from all tasks.")
                 return
 
@@ -102,6 +99,7 @@ def dist_executor_fn(
                 "task": {"index": int(partition_id), "type": "worker"},
             }
             reporter.log(f"Tensorflow config is {tf_config}")
+            _setup_tf_config(tf_config)
 
             strategy = tf.distribute.MultiWorkerMirroredStrategy
             model = _wrap_model(config, strategy)
@@ -224,21 +222,6 @@ def _setup_tf_config(tf_config: dict) -> None:
     os.environ["TF_CONFIG"] = json.dumps(tf_config)
 
 
-def _init_seed(random_seed: int = 0) -> None:
-    """Checks if config is set and sets random seeds.
-
-    :param random_seed: Random seed for tensorflow, numpy, random (default: ``0``).
-
-    :raises KeyError: Checks on environment variables failed.
-    """
-    if "TF_CONFIG" not in os.environ:
-        raise KeyError("Environment variable TF_CONFIG not registered!")
-
-    tf.random.set_seed(random_seed)
-    np.random.seed(random_seed)
-    random.seed(random_seed)
-
-
 def _wrap_model(config, strategy):
     """Wraps the model according to `backend`.
 
@@ -254,20 +237,18 @@ def _wrap_model(config, strategy):
     return model
 
 
-def _sanitize_init_model_params(model: tensorflow.keras.Model) -> None:
+def _sanitize_init_model_params(model: tf.keras.Model) -> None:
     assert isinstance(model, type) or callable(
         model
-    ), """Passed model should be a
-        class, not an instance."""
+    ), "Passed model should be a class, not an instance."
 
 
 def _sanitize_init_strategy_params(
-    strategy: tensorflow.distribute.MultiWorkerMirroredStrategy,
+    strategy: tf.distribute.MultiWorkerMirroredStrategy,
 ) -> None:
     assert isinstance(strategy, type) or callable(
         strategy
-    ), """Passed strategy should be a
-        class, not an instance."""
+    ), "Passed strategy should be a class, not an instance."
 
 
 def _shard_data(data, batch_size, num_shards, index):
@@ -286,13 +267,6 @@ def _shard_data(data, batch_size, num_shards, index):
 
     # The batch size must now be set on the Dataset objects.
     data = data.batch(batch_size)
-
-    # Disable AutoShard.
-    options = tf.data.Options()
-    options.experimental_distribute.auto_shard_policy = (
-        tf.data.experimental.AutoShardPolicy.OFF
-    )
-    data.with_options(options)
 
     if index >= num_shards:
         raise RuntimeError(

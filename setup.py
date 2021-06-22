@@ -32,7 +32,7 @@ setup(
     name='maggy',
     version=version,
     install_requires=[
-        'numpy==1.20.1', 'scikit-optimize==0.7.4', 'statsmodels==0.11.0', 'scipy==1.4.1'
+        'numpy==1.19.2', 'scikit-optimize==0.7.4', 'statsmodels==0.12.2', 'scipy==1.6.3'
     ],
     extras_require={
         'pydoop': ['pydoop'],
@@ -62,6 +62,7 @@ setup(
     download_url='',
     packages=find_packages(),
     long_description=read('README.md'),
+    long_description_content_type="text/markdown",
     python_requires=">=3.7",
     classifiers=[
         'Development Status :: 5 - Production/Stable',
