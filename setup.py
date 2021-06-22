@@ -31,6 +31,7 @@ def read(fname):
 setup(
     name='maggy',
     version=version,
+
     install_requires=[
         'numpy==1.19.2', 'scikit-optimize==0.7.4', 'statsmodels==0.12.2', 'scipy==1.6.3'
     ],
