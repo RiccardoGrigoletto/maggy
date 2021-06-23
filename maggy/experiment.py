@@ -45,7 +45,6 @@ from maggy.core.experiment_driver import OptimizationDriver, AblationDriver
 APP_ID = None
 RUNNING = False
 RUN_ID = 1
-LOCAL = False
 EXPERIMENT_JSON = {}
 
 
@@ -67,7 +66,6 @@ def lagom(train_fn: Callable, config: LagomConfig) -> dict:
     global APP_ID
     global RUNNING
     global RUN_ID
-    global LOCAL
     job_start = time.time()
     try:
         if RUNNING:
@@ -77,11 +75,7 @@ def lagom(train_fn: Callable, config: LagomConfig) -> dict:
         APP_ID = str(spark_context.applicationId)
         APP_ID, RUN_ID = util.register_environment(APP_ID, RUN_ID)
 
-        LOCAL = False
-        if type(EnvSing.get_instance()) == BaseEnv:
-            LOCAL = True  # avoid the execution in the node partitions
-
-        driver = lagom_driver(config, APP_ID, RUN_ID, LOCAL)
+        driver = lagom_driver(config, APP_ID, RUN_ID)
         return driver.run_experiment(train_fn)
     except:  # noqa: E722
         _exception_handler(util.seconds_to_milliseconds(time.time() - job_start))
@@ -116,38 +110,38 @@ def lagom_driver(config, app_id: int, run_id: int, local: bool) -> None:
 
 @lagom_driver.register(OptimizationConfig)
 def _(
-    config: OptimizationConfig, app_id: int, run_id: int, local: bool
+    config: OptimizationConfig, app_id: int, run_id: int
 ) -> OptimizationDriver:
-    return OptimizationDriver(config, app_id, run_id, local)
+    return OptimizationDriver(config, app_id, run_id)
 
 
 @lagom_driver.register(AblationConfig)
-def _(config: AblationConfig, app_id: int, run_id: int, local: bool) -> AblationDriver:
-    return AblationDriver(config, app_id, run_id, local)
+def _(config: AblationConfig, app_id: int, run_id: int) -> AblationDriver:
+    return AblationDriver(config, app_id, run_id)
 
 
 @lagom_driver.register(TorchDistributedConfig)
 # Lazy import of DistributedDriver to avoid Torch import until necessary
 def _(
-    config: TorchDistributedConfig, app_id: int, run_id: int, local: bool
+    config: TorchDistributedConfig, app_id: int, run_id: int
 ) -> "DistributedTrainingDriver":  # noqa: F821
     from maggy.core.experiment_driver.torch_distributed_training_driver import (
         DistributedTrainingDriver,
     )
 
-    return DistributedTrainingDriver(config, app_id, run_id, local)
+    return DistributedTrainingDriver(config, app_id, run_id)
 
 
 @lagom_driver.register(TfDistributedConfig)
 # Lazy import of TensorflowDriver to avoid Tensorflow import until necessary
 def _(
-    config: TfDistributedConfig, app_id: int, run_id: int, local: bool
+    config: TfDistributedConfig, app_id: int, run_id: int
 ) -> "TensorflowDriver":  # noqa: F821
     from maggy.core.experiment_driver.tf_distributed_training_driver import (
         TensorflowDriver,
     )
 
-    return TensorflowDriver(config, app_id, run_id, local)
+    return TensorflowDriver(config, app_id, run_id)
 
 
 def _exception_handler(duration: int) -> None:

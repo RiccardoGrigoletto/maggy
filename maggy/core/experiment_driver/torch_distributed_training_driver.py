@@ -33,7 +33,7 @@ class DistributedTrainingDriver(Driver):
     """
 
     def __init__(
-        self, config: TorchDistributedConfig, app_id: int, run_id: int, local: bool
+        self, config: TorchDistributedConfig, app_id: int, run_id: int
     ):
         """Initializes the server for initial training setup communication and log collection.
 
@@ -41,7 +41,7 @@ class DistributedTrainingDriver(Driver):
         :param app_id: Maggy application ID.
         :param run_id: Maggy run ID.
         """
-        super().__init__(config, app_id, run_id, local)
+        super().__init__(config, app_id, run_id)
         self.server = DistributedTrainingServer(self.num_executors)
         self.results = []
 

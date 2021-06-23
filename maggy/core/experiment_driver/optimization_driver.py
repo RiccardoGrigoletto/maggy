@@ -52,7 +52,7 @@ class OptimizationDriver(Driver):
     }
 
     def __init__(
-        self, config: OptimizationConfig, app_id: int, run_id: int, local: bool
+        self, config: OptimizationConfig, app_id: int, run_id: int
     ):
         """Performs argument checks and initializes the optimization
         controller.
@@ -64,7 +64,7 @@ class OptimizationDriver(Driver):
         :raises ValueError: In case an invalid optimization direction was
             specified.
         """
-        super().__init__(config, app_id, run_id, local)
+        super().__init__(config, app_id, run_id)
         self._final_store = []
         self._trial_store = {}
         self.experiment_done = False

@@ -34,7 +34,7 @@ class TensorflowDriver(Driver):
     """
 
     def __init__(
-        self, config: TfDistributedConfig, app_id: int, run_id: int, local: bool
+        self, config: TfDistributedConfig, app_id: int, run_id: int
     ):
         """Initializes the server, but does not start it yet.
 
@@ -43,10 +43,9 @@ class TensorflowDriver(Driver):
         :param app_id: Maggy application ID.
         :param run_id: Maggy run ID.
         """
-        super().__init__(config, app_id, run_id, local)
+        super().__init__(config, app_id, run_id)
         self.server = TensorflowServer(self.num_executors)
         self.results = []
-        self.local = local
 
     def _exp_startup_callback(self) -> None:
         """No special startup actions required."""
@@ -59,23 +58,12 @@ class TensorflowDriver(Driver):
 
         :returns: The result in a dictionary.
         """
-        average_metric = self.average_metric()
-        if average_metric != -1:
-            result = {"test result": self.average_metric()}
-
-            print("Final average test loss: {:.3f}".format(self.average_metric()))
-            print(
-                "Finished experiment. Total run time: "
-                + util.time_diff(self.job_start, job_end)
-            )
-        else:
-            result = {"test result not available"}
-
-            print("Final average test loss not available")
-            print(
-                "Finished experiment. Total run time: "
-                + util.time_diff(self.job_start, job_end)
-            )
+        result = {"test result": self.average_metric()}
+        print("Final average test loss: {:.3f}".format(self.average_metric()))
+        print(
+            "Finished experiment. Total run time: "
+            + util.time_diff(self.job_start, job_end)
+        )
 
         return result
 
@@ -106,26 +94,17 @@ class TensorflowDriver(Driver):
 
         :returns: The monkey patched training function."""
 
-        if self.local:
-            return local_executor_fn(
-                train_fn,
-                self.config,
-                self.app_id,
-                self.run_id,
-                self.log_dir,
-            )
-        else:
-            return dist_executor_fn(
-                train_fn,
-                self.config,
-                self.num_executors,
-                self.app_id,
-                self.run_id,
-                self.server_addr,
-                self.hb_interval,
-                self._secret,
-                self.log_dir,
-            )
+        return dist_executor_fn(
+            train_fn,
+            self.config,
+            self.num_executors,
+            self.app_id,
+            self.run_id,
+            self.server_addr,
+            self.hb_interval,
+            self._secret,
+            self.log_dir,
+        )
 
     def _register_msg_callbacks(self) -> None:
         """Registers a metric message callback for heartbeat responses to spark
