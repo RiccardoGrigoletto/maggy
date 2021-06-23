@@ -28,8 +28,6 @@ import time
 from functools import singledispatch
 from typing import Callable
 
-from maggy.core.environment.base import BaseEnv
-
 from maggy import util
 from maggy.core.environment.singleton import EnvSing
 from maggy.experiment_config import (
@@ -74,7 +72,6 @@ def lagom(train_fn: Callable, config: LagomConfig) -> dict:
         spark_context = util.find_spark().sparkContext
         APP_ID = str(spark_context.applicationId)
         APP_ID, RUN_ID = util.register_environment(APP_ID, RUN_ID)
-
         driver = lagom_driver(config, APP_ID, RUN_ID)
         return driver.run_experiment(train_fn)
     except:  # noqa: E722
@@ -88,7 +85,7 @@ def lagom(train_fn: Callable, config: LagomConfig) -> dict:
 
 
 @singledispatch
-def lagom_driver(config, app_id: int, run_id: int, local: bool) -> None:
+def lagom_driver(config, app_id: int, run_id: int) -> None:
     """Dispatcher function for the experiment driver.
 
     Initializes the appropriate driver according to the config.

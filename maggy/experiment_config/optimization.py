@@ -39,8 +39,7 @@ class OptimizationConfig(LagomConfig):
         es_policy: Union[str, AbstractEarlyStop] = "median",
         name: str = "HPOptimization",
         description: str = "",
-        hb_interval: int = 1,
-        fixed_hp: dict = None,
+        hb_interval: int = 1
     ):
         """Initializes HP optimization experiment parameters.
 
@@ -56,7 +55,6 @@ class OptimizationConfig(LagomConfig):
         :param name: Experiment name.
         :param description: A description of the experiment.
         :param hb_interval: Heartbeat interval with which the server is polling.
-        :parm fixed_hp: Hyperparamets not to be tuned.
         """
         super().__init__(name, description, hb_interval)
         if not num_trials > 0:
@@ -69,4 +67,3 @@ class OptimizationConfig(LagomConfig):
         self.es_policy = es_policy
         self.es_interval = es_interval
         self.es_min = es_min
-        self.fixed_hp = fixed_hp

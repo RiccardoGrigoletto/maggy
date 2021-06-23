@@ -64,7 +64,6 @@ class TensorflowDriver(Driver):
             "Finished experiment. Total run time: "
             + util.time_diff(self.job_start, job_end)
         )
-
         return result
 
     def _exp_exception_callback(self, exc: Type[Exception]) -> None:
