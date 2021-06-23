@@ -20,6 +20,7 @@ from typing import Callable, Type, Any
 from maggy import util
 from maggy.core.experiment_driver.driver import Driver
 from maggy.core.executors.tf_dist_executor import dist_executor_fn
+from maggy.core.executors.local_tf_dist_executor import local_executor_fn
 
 from maggy.experiment_config import TfDistributedConfig
 from maggy.core.rpc import TensorflowServer
@@ -32,7 +33,9 @@ class TensorflowDriver(Driver):
     logging, and accumulates final results.
     """
 
-    def __init__(self, config: TfDistributedConfig, app_id: int, run_id: int):
+    def __init__(
+        self, config: TfDistributedConfig, app_id: int, run_id: int
+    ):
         """Initializes the server, but does not start it yet.
 
         :param config: Experiment config.
@@ -132,5 +135,8 @@ class TensorflowDriver(Driver):
 
         :returns: The average result value.
         """
-        valid_results = [x for x in self.results if x is not None]
-        return sum(valid_results) / len(valid_results)
+        if self.results:
+            valid_results = [x for x in self.results if x is not None]
+            return sum(valid_results) / len(valid_results)
+        else:
+            return -1

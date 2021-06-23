@@ -32,7 +32,9 @@ class DistributedTrainingDriver(Driver):
     logging, and accumulates final results.
     """
 
-    def __init__(self, config: TorchDistributedConfig, app_id: int, run_id: int):
+    def __init__(
+        self, config: TorchDistributedConfig, app_id: int, run_id: int
+    ):
         """Initializes the server for initial training setup communication and log collection.
 
         :param config: Experiment config.

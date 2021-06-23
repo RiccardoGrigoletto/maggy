@@ -126,6 +126,7 @@ class Driver(ABC):
                 "{} | {}".format(self.name, str(self.__class__.__name__)),
             )
             executor_fn = self._patching_fn(train_fn)
+
             # Trigger execution on Spark nodes.
             node_rdd.foreachPartition(executor_fn)
 

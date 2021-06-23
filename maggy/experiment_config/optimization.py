@@ -39,7 +39,7 @@ class OptimizationConfig(LagomConfig):
         es_policy: Union[str, AbstractEarlyStop] = "median",
         name: str = "HPOptimization",
         description: str = "",
-        hb_interval: int = 1,
+        hb_interval: int = 1
     ):
         """Initializes HP optimization experiment parameters.
 

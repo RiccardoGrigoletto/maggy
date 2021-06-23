@@ -104,22 +104,6 @@ def dist_executor_fn(
             strategy = tf.distribute.MultiWorkerMirroredStrategy
             model = _wrap_model(config, strategy)
 
-            train_set, test_set = _consume_data(config)
-
-            config.train_set = _shard_data(
-                train_set,
-                config.hparams["train_batch_size"],
-                len(reservations),
-                partition_id,
-            )
-
-            config.test_set = _shard_data(
-                test_set,
-                config.hparams["test_batch_size"],
-                len(reservations),
-                partition_id,
-            )
-
             reporter.log(f"index of slice {partition_id}")
             reporter.log("Starting distributed training.")
             sig = inspect.signature(train_fn)
@@ -127,16 +111,12 @@ def dist_executor_fn(
             if sig.parameters.get("reporter", None):
                 retval = train_fn(
                     model=model,
-                    train_set=config.train_set,
-                    test_set=config.test_set,
                     reporter=reporter,
                     hparams=config.hparams,
                 )
             else:
                 retval = train_fn(
                     model=model,
-                    train_set=config.train_set,
-                    test_set=config.test_set,
                     hparams=config.hparams,
                 )
 

@@ -51,7 +51,9 @@ class OptimizationDriver(Driver):
         "gridsearch": GridSearch,
     }
 
-    def __init__(self, config: OptimizationConfig, app_id: int, run_id: int):
+    def __init__(
+        self, config: OptimizationConfig, app_id: int, run_id: int
+    ):
         """Performs argument checks and initializes the optimization
         controller.
 

@@ -106,7 +106,9 @@ def lagom_driver(config, app_id: int, run_id: int) -> None:
 
 
 @lagom_driver.register(OptimizationConfig)
-def _(config: OptimizationConfig, app_id: int, run_id: int) -> OptimizationDriver:
+def _(
+    config: OptimizationConfig, app_id: int, run_id: int
+) -> OptimizationDriver:
     return OptimizationDriver(config, app_id, run_id)
 
 
